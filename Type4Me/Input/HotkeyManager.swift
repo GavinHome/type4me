@@ -276,7 +276,7 @@ final class HotkeyManager: NSObject {
     // MARK: - Helpers
 
     private func isModifierKeyCode(_ keyCode: CGKeyCode) -> Bool {
-        [54, 55, 56, 58, 59, 60, 61, 62].contains(keyCode)
+        [54, 55, 56, 58, 59, 60, 61, 62, 63].contains(keyCode)
     }
 
     private func isModifierPressed(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
@@ -285,6 +285,7 @@ final class HotkeyManager: NSObject {
         case 56, 60: return flags.contains(.maskShift)
         case 58, 61: return flags.contains(.maskAlternate)
         case 59, 62: return flags.contains(.maskControl)
+        case 63: return flags.contains(.maskSecondaryFn)
         default: return false
         }
     }

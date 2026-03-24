@@ -631,6 +631,16 @@ private struct HotkeyRecordingSheet: View {
                 )
             }
 
+            if capturedKeyCode == 63 {
+                Text(L(
+                    "⚠️ 请在系统设置 → 键盘中，将「按下 🌐 键时」改为「不执行任何操作」，否则会与系统功能冲突",
+                    "⚠️ Go to System Settings → Keyboard and set \"Press 🌐 key to\" to \"Do Nothing\" to avoid conflicts"
+                ))
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 12) {
                 if !isListening && capturedKeyCode != nil {
                     Button(L("重录", "Re-record")) {
@@ -771,6 +781,7 @@ private struct HotkeyRecordingSheet: View {
         case 56, 60: return flags.contains(.shift)
         case 58, 61: return flags.contains(.option)
         case 59, 62: return flags.contains(.control)
+        case 63: return flags.contains(.function)
         default: return false
         }
     }

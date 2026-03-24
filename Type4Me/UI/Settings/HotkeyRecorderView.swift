@@ -150,7 +150,7 @@ struct HotkeyRecorderView: View {
 
     // MARK: - Modifier Press Detection
 
-    static let modifierKeyCodes: Set<Int> = [54, 55, 56, 58, 59, 60, 61, 62]
+    static let modifierKeyCodes: Set<Int> = [54, 55, 56, 58, 59, 60, 61, 62, 63]
 
     private func isModifierPressed(keyCode: Int, flags: NSEvent.ModifierFlags) -> Bool {
         switch keyCode {
@@ -158,6 +158,7 @@ struct HotkeyRecorderView: View {
         case 56, 60: return flags.contains(.shift)
         case 58, 61: return flags.contains(.option)
         case 59, 62: return flags.contains(.control)
+        case 63: return flags.contains(.function)
         default: return false
         }
     }
@@ -189,6 +190,7 @@ struct HotkeyRecorderView: View {
         case 60: return "Right Shift"
         case 61: return "Right Option"
         case 62: return "Right Control"
+        case 63: return "fn"
 
         // Special keys
         case 36: return "Return"

@@ -81,6 +81,8 @@ actor RecognitionSession {
     private var eventConsumptionTask: Task<Void, Never>?
     private var activeFlashTask: Task<String?, Never>?
     private var hasEmittedReadyForCurrentSession = false
+    private var audioChunkContinuation: AsyncStream<Data>.Continuation?
+    private var audioChunkSenderTask: Task<Void, Never>?
 
     // MARK: - Prompt context (selected text + clipboard captured at recording start)
 
@@ -221,6 +223,7 @@ actor RecognitionSession {
 
         // Reset text state
         currentTranscript = .empty
+        await finishAudioChunkPipeline(timeout: .milliseconds(100))
 
         // Start ASR event consumption
         let events = await client.events
@@ -239,6 +242,7 @@ actor RecognitionSession {
         }
 
         // Wire audio callback → ASR
+        let chunkContinuation = setupAudioChunkPipeline()
         var chunkCount = 0
         audioEngine.onAudioChunk = { [weak self] data in
             guard let self else { return }
@@ -250,9 +254,7 @@ actor RecognitionSession {
                     await self.markReadyIfNeeded()
                 }
             }
-            Task {
-                try? await self.sendAudioToASR(data)
-            }
+            chunkContinuation.yield(data)
         }
 
         do {
@@ -263,6 +265,7 @@ actor RecognitionSession {
             NSLog("[Session] Audio engine start FAILED: %@", String(describing: error))
             DebugFileLogger.log("audio engine start failed: \(String(describing: error))")
             SoundFeedback.playError()
+            await finishAudioChunkPipeline(timeout: .milliseconds(100))
             await client.disconnect()
             self.asrClient = nil
             state = .idle
@@ -302,9 +305,10 @@ actor RecognitionSession {
         SoundFeedback.playStop()
         state = .finishing
 
-        // Stop audio capture (nil callback BEFORE stop, because stop() calls flushRemaining)
-        audioEngine.onAudioChunk = nil
+        // Stop capture first so flushRemaining() can emit the tail audio chunk.
         audioEngine.stop()
+        audioEngine.onAudioChunk = nil
+        await finishAudioChunkPipeline()
         DebugFileLogger.log("stop: audio stopped +\(ContinuousClock.now - stopT0)")
 
         // For LLM modes: reuse speculative LLM if text matches,
@@ -389,7 +393,7 @@ actor RecognitionSession {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask { try await client.endAudio() }
                         group.addTask {
-                            try await Task.sleep(for: .seconds(2))
+                            try await Task.sleep(for: .seconds(3))
                             throw CancellationError()
                         }
                         try await group.next()
@@ -400,15 +404,23 @@ actor RecognitionSession {
                     DebugFileLogger.log("endAudio timeout/error: \(error)")
                 }
                 if let task = eventConsumptionTask {
-                    task.cancel()
-                    _ = await Task.detached {
-                        await withTaskGroup(of: Void.self) { group in
-                            group.addTask { await task.value }
-                            group.addTask { try? await Task.sleep(for: .seconds(1)) }
-                            await group.next()
-                            group.cancelAll()
+                    let streamDrained = await withTaskGroup(of: Bool.self) { group in
+                        group.addTask {
+                            await task.value
+                            return true
                         }
-                    }.value
+                        group.addTask {
+                            try? await Task.sleep(for: .seconds(2))
+                            return false
+                        }
+                        let first = await group.next() ?? true
+                        group.cancelAll()
+                        return first
+                    }
+                    if !streamDrained {
+                        task.cancel()
+                        DebugFileLogger.log("event stream drain timeout; eventConsumptionTask cancelled")
+                    }
                 }
                 await client.disconnect()
             }
@@ -565,6 +577,51 @@ actor RecognitionSession {
         try await client.sendAudio(data)
     }
 
+    private func setupAudioChunkPipeline() -> AsyncStream<Data>.Continuation {
+        audioChunkContinuation?.finish()
+        audioChunkSenderTask?.cancel()
+
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        audioChunkContinuation = continuation
+        audioChunkSenderTask = Task { [weak self] in
+            for await data in stream {
+                guard let self else { break }
+                do {
+                    try await self.sendAudioToASR(data)
+                } catch {
+                    DebugFileLogger.log("audio chunk send failed: \(error)")
+                }
+            }
+        }
+        return continuation
+    }
+
+    private func finishAudioChunkPipeline(timeout: Duration = .seconds(1)) async {
+        audioChunkContinuation?.finish()
+        audioChunkContinuation = nil
+
+        guard let senderTask = audioChunkSenderTask else { return }
+        let drained = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await senderTask.value
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? true
+            group.cancelAll()
+            return first
+        }
+
+        if !drained {
+            senderTask.cancel()
+            DebugFileLogger.log("audio chunk pipeline drain timeout; sender task cancelled")
+        }
+        audioChunkSenderTask = nil
+    }
+
     private func markReadyIfNeeded() {
         guard !hasEmittedReadyForCurrentSession else { return }
         hasEmittedReadyForCurrentSession = true
@@ -645,9 +702,10 @@ actor RecognitionSession {
         activeFlashTask = nil
         resetSpeculativeLLM()
 
-        audioEngine.onAudioChunk = nil
         audioEngine.stop()
+        audioEngine.onAudioChunk = nil
         audioEngine.onAudioLevel = nil
+        await finishAudioChunkPipeline(timeout: .milliseconds(100))
 
         if let client = asrClient {
             await client.disconnect()

@@ -1,6 +1,11 @@
 {
-  "latest": "1.2.3",
+  "latest": "1.2.4",
   "releases": [
+    {
+      "version": "1.2.4",
+      "date": "2026-03-27",
+      "notes": "- 新增 OpenAI 语音识别引擎 (gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1)\n- 新增 Ollama 本地 LLM 支持，无需 API Key\n- 修复 MiniMax 国内版 API 域名错误导致 LLM 返回空结果\n- 修复 build-sherpa.sh 构建路径和 bridge 文件覆盖问题\n- 修复 LLM 返回空字符串时未回退到原始文本\n- 设置页输入框不再被长文本撑大"
+    },
     {
       "version": "1.2.3",
       "date": "2026-03-27",

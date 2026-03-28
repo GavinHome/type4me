@@ -820,8 +820,8 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         let testValues = effectiveASRValues
         let provider = selectedASRProvider
         testTask = Task {
-            // Volcengine: auto-detect best resource ID (seed 2.0 vs bigasr)
-            if provider == .volcano {
+            // Volcengine: auto-detect when "auto" is selected
+            if provider == .volcano && (testValues["resourceId"] ?? "") == VolcanoASRConfig.resourceIdAuto {
                 await testVolcanoWithAutoResource(baseValues: testValues)
                 return
             }
@@ -846,6 +846,8 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     /// Test both Volcengine resource IDs and pick the best one.
+    /// Saves with resourceId="auto" so the picker stays on "Auto", and stores the
+    /// resolved ID in "resolvedResourceId" for actual connections.
     private func testVolcanoWithAutoResource(baseValues: [String: String]) async {
         let options = currentASRRequestOptions(enablePunc: false)
         let seedId = VolcanoASRConfig.resourceIdSeedASR
@@ -856,9 +858,9 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         guard !Task.isCancelled else { return }
 
         if seedOK {
-            // Seed 2.0 works, use it
             var values = baseValues
-            values["resourceId"] = seedId
+            values["resourceId"] = VolcanoASRConfig.resourceIdAuto
+            values["resolvedResourceId"] = seedId
             saveASRCredentialsQuietly(values)
             asrTestStatus = .success
             return
@@ -870,7 +872,8 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
 
         if bigOK {
             var values = baseValues
-            values["resourceId"] = bigId
+            values["resourceId"] = VolcanoASRConfig.resourceIdAuto
+            values["resolvedResourceId"] = bigId
             saveASRCredentialsQuietly(values)
             asrTestStatus = .success
             volcResourceHint = L(
@@ -880,7 +883,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             return
         }
 
-        // Both failed, show the seed error (more common)
+        // Both failed
         asrTestStatus = .failed(L("连接失败，请检查 App ID 和 Access Token", "Connection failed, check App ID & Access Token"))
     }
 

@@ -87,7 +87,75 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model_loaded": _model is not None}
+    return {"status": "ok", "model_loaded": _model is not None, "llm_loaded": _llm is not None}
+
+
+# --- LLM (Qwen3 via llama.cpp) ---
+
+_llm = None
+_llm_lock = asyncio.Lock()
+
+
+def _load_llm(model_path: str):
+    """Load LLM model lazily on first request."""
+    global _llm
+    if _llm is not None:
+        return _llm
+    from llama_cpp import Llama
+    print(f"Loading LLM from {model_path}...", flush=True)
+    _llm = Llama(
+        model_path=model_path,
+        n_ctx=4096,
+        n_gpu_layers=-1,  # Use Metal (all layers on GPU)
+        verbose=False,
+    )
+    print("LLM loaded.", flush=True)
+    return _llm
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: dict):
+    """OpenAI-compatible chat completions endpoint."""
+    if _llm is None and not _llm_model_path:
+        return {"error": "LLM not configured"}, 503
+
+    messages = request.get("messages", [])
+    temperature = request.get("temperature", 0.7)
+    max_tokens = request.get("max_tokens", 1024)
+
+    # Lazy load LLM on first request
+    async with _llm_lock:
+        llm = await asyncio.get_event_loop().run_in_executor(
+            None, _load_llm, _llm_model_path
+        )
+
+    # Disable Qwen3 thinking mode for faster direct responses
+    if messages and messages[-1].get("role") == "user":
+        content = messages[-1]["content"]
+        if not content.startswith("/no_think"):
+            messages = messages.copy()
+            messages[-1] = {**messages[-1], "content": f"/no_think\n{content}"}
+
+    # Run inference in thread pool to not block event loop
+    def _generate():
+        result = llm.create_chat_completion(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        # Strip any remaining <think>...</think> tags from response
+        if result.get("choices"):
+            text = result["choices"][0]["message"]["content"]
+            import re
+            text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+            result["choices"][0]["message"]["content"] = text
+        return result
+
+    result = await asyncio.get_event_loop().run_in_executor(None, _generate)
+    return result
+
+
+_llm_model_path = ""
 
 
 def find_free_port():
@@ -109,6 +177,7 @@ def main():
     parser.add_argument("--no-textnorm", dest="textnorm", action="store_false")
     parser.add_argument("--padding", type=int, default=8, help="Encoder context padding frames (higher = more accurate, slower)")
     parser.add_argument("--chunk-size", type=int, default=10, help="Encoder chunk size in LFR frames (~60ms each)")
+    parser.add_argument("--llm-model", default="", help="Path to GGUF LLM model for local chat completions")
     args = parser.parse_args()
 
     global _model
@@ -149,6 +218,12 @@ def main():
         chunk_size=args.chunk_size,
     )
     print("Model loaded.", flush=True)
+
+    # Configure LLM (lazy-loaded on first request)
+    global _llm_model_path
+    if args.llm_model and Path(args.llm_model).exists():
+        _llm_model_path = args.llm_model
+        print(f"LLM configured: {args.llm_model} (lazy load on first request)", flush=True)
 
     # Find port
     port = args.port if args.port != 0 else find_free_port()

@@ -33,27 +33,41 @@ async def websocket_endpoint(ws: WebSocket):
     # Reset model state for new session
     model.reset()
 
+    # Accumulate all audio for two-pass final recognition
+    all_samples: list[int] = []
+
     try:
         while True:
             data = await ws.receive_bytes()
 
             if len(data) == 0:
                 # Empty frame = end of audio signal
-                # Run final inference
-                for result in model.streaming_inference([], is_last=True):
-                    await ws.send_json({
-                        "type": "transcript",
-                        "text": result.get("text", ""),
-                        "is_final": True,
-                    })
+                # Two-pass: run non-streaming inference on full audio for best accuracy
+                if all_samples:
+                    final_text = model.full_inference(all_samples)
+                    if final_text:
+                        await ws.send_json({
+                            "type": "transcript",
+                            "text": final_text,
+                            "is_final": True,
+                        })
+                else:
+                    # Fallback: flush streaming decoder
+                    for result in model.streaming_inference([], is_last=True):
+                        await ws.send_json({
+                            "type": "transcript",
+                            "text": result.get("text", ""),
+                            "is_final": True,
+                        })
                 await ws.send_json({"type": "completed"})
                 break
 
             # Convert PCM16 little-endian bytes to int16-range float list
             sample_count = len(data) // 2
             samples = list(struct.unpack(f"<{sample_count}h", data))
+            all_samples.extend(samples)
 
-            # Run streaming inference
+            # Run streaming inference (partial results for real-time display)
             for result in model.streaming_inference(samples, is_last=False):
                 text = result.get("text", "")
                 if text:

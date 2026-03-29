@@ -1058,6 +1058,39 @@ class StreamingSenseVoice:
         self.fbank = OnlineFbank(window_type="hamming")
         self.caches = torch.zeros(self.caches_shape)
 
+    def full_inference(self, samples) -> str:
+        """Non-streaming inference on complete audio for highest accuracy.
+
+        Used as the second pass after streaming inference provides real-time partials.
+        Processes the entire audio at once, giving the model full context.
+        """
+        import numpy as np
+        from funasr import AutoModel
+
+        audio = np.array(samples, dtype=np.float32) / 32768.0  # normalize to [-1, 1]
+
+        # Use the high-level FunASR generate() API for best accuracy
+        if not hasattr(self, '_funasr_model'):
+            self._funasr_model = AutoModel(
+                model='iic/SenseVoiceSmall',
+                device=self.device,
+                disable_update=True,
+            )
+
+        result = self._funasr_model.generate(
+            input=audio,
+            cache={},
+            language="auto",
+            use_itn=True,
+        )
+        if result and len(result) > 0:
+            text = result[0].get('text', '')
+            # Strip SenseVoice tags like <|zh|><|NEUTRAL|><|Speech|><|withitn|>
+            import re
+            text = re.sub(r'<\|[^|]+\|>', '', text).strip()
+            return text
+        return ""
+
     def get_size(self):
         effective_size = self.cur_idx + 1 - self.padding
         if effective_size <= 0:

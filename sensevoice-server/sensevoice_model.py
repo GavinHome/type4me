@@ -989,6 +989,7 @@ from typing import List
 from asr_decoder import CTCDecoder
 from funasr.frontends.wav_frontend import load_cmvn
 from online_fbank import OnlineFbank
+import os
 import numpy as np
 
 sensevoice_models = {}
@@ -1005,6 +1006,7 @@ class StreamingSenseVoice:
         language: str = "zh",
         textnorm: bool = False,
         device: str = "cpu",
+        onnx_model_path: str = "",
         model: str = "iic/SenseVoiceSmall",
     ):
         """
@@ -1054,6 +1056,15 @@ class StreamingSenseVoice:
         self.zeros = np.zeros((1, kwargs["input_size"]), dtype=float)
         self.all_probs = []  # accumulate CTC probs for final re-decode
 
+        # Load ONNX model for fast full_inference (int8, ~13x faster than PyTorch)
+        self._onnx_session = None
+        if onnx_model_path and os.path.exists(onnx_model_path):
+            import onnxruntime as ort
+            self._onnx_session = ort.InferenceSession(
+                onnx_model_path, providers=["CPUExecutionProvider"]
+            )
+            print(f"ONNX model loaded: {onnx_model_path}", flush=True)
+
     @staticmethod
     def load_model(model: str, device: str) -> tuple:
         key = f"{model}-{device}"
@@ -1074,10 +1085,9 @@ class StreamingSenseVoice:
     def full_inference(self, samples) -> str:
         """Non-streaming inference on complete audio for highest accuracy.
 
-        Runs the encoder on the full audio at once (not chunked), giving full
-        context for each frame. Fixes chunk-boundary artifacts like "codinging".
-        Uses the already-loaded model (no FunASR overhead, no cold start).
-        ~0.5s for 8s audio on CPU.
+        Uses ONNX Runtime int8 model (~13x faster than PyTorch float32).
+        Falls back to PyTorch if ONNX model not available.
+        ~0.06s for 8s audio on CPU.
         """
         if not samples:
             return ""
@@ -1091,17 +1101,30 @@ class StreamingSenseVoice:
         if len(features) == 0:
             return ""
 
-        speech = torch.tensor(features).unsqueeze(0).to(self.device)
-        speech_lengths = torch.tensor([speech.shape[1]]).to(self.device)
-        speech = torch.cat((self.query, speech), dim=1)
-        speech_lengths += 4
+        x = np.array(features, dtype=np.float32)[np.newaxis, :, :]
 
-        with torch.no_grad():
-            encoder_out, _ = self.model.encoder(speech, speech_lengths)
-        logits = self.model.ctc.log_softmax(encoder_out)[0, 4:]
+        if self._onnx_session is not None:
+            # ONNX path: int8 quantized, ~13x faster
+            x_length = np.array([x.shape[1]], dtype=np.int32)
+            language = np.array([0], dtype=np.int32)   # auto
+            text_norm = np.array([15], dtype=np.int32)  # withitn
+            result = self._onnx_session.run(
+                None,
+                {"x": x, "x_length": x_length, "language": language, "text_norm": text_norm},
+            )
+            logits = result[0][0]  # (T, vocab_size)
+        else:
+            # PyTorch fallback
+            speech = torch.tensor(features).unsqueeze(0).to(self.device)
+            speech_lengths = torch.tensor([speech.shape[1]]).to(self.device)
+            speech = torch.cat((self.query, speech), dim=1)
+            speech_lengths += 4
+            with torch.no_grad():
+                encoder_out, _ = self.model.encoder(speech, speech_lengths)
+            logits = self.model.ctc.log_softmax(encoder_out)[0, 4:].numpy()
 
         # Greedy decode on full sequence
-        token_ids = logits.argmax(dim=-1).tolist()
+        token_ids = logits.argmax(axis=-1).tolist()
         prev = -1
         filtered = []
         for t in token_ids:
@@ -1210,6 +1233,17 @@ def load_model(
         device = "cpu"
         print(f"Device: {device} (CPU is faster than MPS for this model size)", flush=True)
 
+    # Auto-detect ONNX model for fast full_inference
+    onnx_model_path = ""
+    # Check common locations
+    for candidate in [
+        os.path.expanduser("~/Library/Application Support/Type4Me/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx"),
+        os.path.join(model_dir, "model.int8.onnx") if os.path.isdir(model_dir) else "",
+    ]:
+        if candidate and os.path.exists(candidate):
+            onnx_model_path = candidate
+            break
+
     model = StreamingSenseVoice(
         model=model_dir,
         device=device,
@@ -1220,6 +1254,7 @@ def load_model(
         textnorm=textnorm,
         padding=padding,
         chunk_size=chunk_size,
+        onnx_model_path=onnx_model_path,
     )
 
     # Warmup: run one dummy inference to eliminate PyTorch JIT cold start

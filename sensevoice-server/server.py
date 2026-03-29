@@ -33,12 +33,8 @@ async def websocket_endpoint(ws: WebSocket):
     # Reset model state for new session
     model.reset()
 
-    # Accumulate all audio for two-pass recognition
+    # Accumulate all audio for final full inference
     all_samples: list[int] = []
-    # Rolling re-scan: track when last full inference ran
-    last_rescan_at = 0  # sample count at last rescan
-    rescan_interval = 48000  # rescan every ~3 seconds of new audio (16kHz * 3)
-    min_rescan_samples = 16000  # need at least 1s of audio before first rescan
 
     try:
         while True:
@@ -46,7 +42,7 @@ async def websocket_endpoint(ws: WebSocket):
 
             if len(data) == 0:
                 # Empty frame = end of audio signal
-                # Final full inference on complete audio
+                # Full inference on complete audio for best accuracy
                 if all_samples:
                     final_text = model.full_inference(all_samples)
                     if final_text:
@@ -77,22 +73,6 @@ async def websocket_endpoint(ws: WebSocket):
                     await ws.send_json({
                         "type": "transcript",
                         "text": text,
-                        "is_final": False,
-                    })
-
-            # Rolling re-scan: periodically run full_inference on all audio so far
-            # to correct earlier predictions with expanded context
-            samples_since_rescan = len(all_samples) - last_rescan_at
-            if (len(all_samples) >= min_rescan_samples
-                    and samples_since_rescan >= rescan_interval):
-                corrected = await asyncio.get_event_loop().run_in_executor(
-                    None, model.full_inference, all_samples
-                )
-                last_rescan_at = len(all_samples)
-                if corrected:
-                    await ws.send_json({
-                        "type": "transcript",
-                        "text": corrected,
                         "is_final": False,
                     })
 

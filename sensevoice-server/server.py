@@ -114,12 +114,26 @@ def main():
     global _model
 
     # Load hotwords from file
+    # Each line is a hotword phrase. Multi-word English phrases are split into
+    # individual words to avoid BPE space-prefix issues (e.g. "▁coding" not in vocab).
+    # Chinese phrases are kept as-is since each character is already a token.
     hotwords = None
     if args.hotwords_file and Path(args.hotwords_file).exists():
-        lines = Path(args.hotwords_file).read_text().strip().splitlines()
-        hotwords = [l.strip() for l in lines if l.strip()]
+        raw_lines = Path(args.hotwords_file).read_text().strip().splitlines()
+        hotwords = []
+        for line in raw_lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Split on spaces: "Vibe coding" → ["Vibe", "coding"]
+            # Chinese "语音识别" has no spaces, stays as one entry
+            words = line.split()
+            hotwords.extend(words)
+        # Deduplicate while preserving order
+        seen = set()
+        hotwords = [w for w in hotwords if w not in seen and not seen.add(w)]
         if hotwords:
-            print(f"Loaded {len(hotwords)} hotwords", flush=True)
+            print(f"Loaded {len(hotwords)} hotwords: {hotwords[:10]}", flush=True)
 
     # Load model
     print(f"Loading model from {args.model_dir}...", flush=True)

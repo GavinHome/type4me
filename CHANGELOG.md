@@ -11,13 +11,12 @@
 - 设置页新增两个模型独立启停按钮 + 状态显示
 - 支持 Qwen3-only 模式（悬浮窗显示"录音中"）
 
-### 📦 三种 DMG 版本
+### 📦 两种 DMG 版本
 
 | 版本 | 包含内容 |
 |------|---------|
 | Cloud | 纯云端识别，最小体积 (~23MB) |
-| Lite | 内嵌 SenseVoice 本地模型 (~1.1GB) |
-| Full | SenseVoice + Qwen3-ASR + 本地 LLM (~6GB) |
+| Local | SenseVoice + Qwen3-ASR 双模型本地识别，开箱即用 (~1.2GB) |
 
 ### 🗂 存储架构升级
 

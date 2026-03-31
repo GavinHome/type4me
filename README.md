@@ -1,7 +1,7 @@
 > update：官方[词库管理Skill](https://github.com/joewongjc/type4me-vocab-skill)，帮你大幅提高识别准确率
 
 <p align="center">
-  <img src="docs/images/header-combined.svg" width="840" alt="Type4Me - macOS 语音输入法" />
+  <img src="docs/images/header-combined.svg" width="100%" alt="Type4Me - macOS 语音输入法" />
 </p>
 
 
